@@ -1,11 +1,13 @@
 {
   "name": "ba-browser-worker",
-  "type": "module",
+  "version": "1.0.0",
+  "main": "index.js",
   "scripts": {
+    "postinstall": "npx playwright install chromium",
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "playwright": "^1.45.0"
+    "playwright": "^1.41.0"
   }
 }
