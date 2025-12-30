@@ -1,7 +1,11 @@
 {
   "name": "ba-browser-worker",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "postinstall": "npx playwright install chromium",
     "start": "node index.js"
