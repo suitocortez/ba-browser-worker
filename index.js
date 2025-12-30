@@ -4,6 +4,8 @@ import { chromium } from "playwright";
 const app = express();
 app.use(express.json());
 
+const PORT = process.env.PORT || 8080;
+
 app.post("/extract", async (req, res) => {
   const { refnr } = req.body;
 
@@ -11,80 +13,92 @@ app.post("/extract", async (req, res) => {
     return res.status(400).json({ error: "refnr fehlt" });
   }
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  });
-
-  const page = await browser.newPage();
+  let browser;
 
   try {
-    // 1️⃣ Seite laden
-    await page.goto(
-      `https://www.arbeitsagentur.de/jobsuche/jobdetail/${refnr}`,
-      { timeout: 30000 }
-    );
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
 
-    // 2️⃣ Warten bis SPA fertig ist
-    await page.waitForLoadState("networkidle", { timeout: 30000 });
+    const page = await browser.newPage();
 
-    // Debug
-    const html = await page.content();
-    console.log("HTML-Länge:", html.length);
+    const url = `https://www.arbeitsagentur.de/jobsuche/jobdetail/${refnr}`;
+    await page.goto(url, { timeout: 30000, waitUntil: "domcontentloaded" });
 
-    // 3️⃣ Kontaktdaten extrahieren (robust, tolerant)
-    const contact = await page.evaluate(() => {
+    // Warten bis Seite wirklich da ist
+    await page.waitForTimeout(3000);
+
+    // Gesamten sichtbaren Text einsammeln
+    const result = await page.evaluate(() => {
       const text = document.body.innerText;
 
+      // 🔒 Captcha erkennen
+      const hasCaptcha =
+        text.includes("Sicherheitsabfrage") ||
+        text.includes("Dargestellte Zeichen") ||
+        text.includes("Bitte geben Sie die dargestellten Zeichen ein");
+
+      if (hasCaptcha) {
+        return {
+          protected: true,
+          reason: "captcha",
+          contact: null
+        };
+      }
+
+      // 📧 E-Mail extrahieren
       const emailMatch = text.match(
         /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
       );
 
+      // ☎ Telefonnummer extrahieren
       const phoneMatch = text.match(
         /(\+49|0)[0-9 ()\/-]{6,}/
       );
 
+      // 👤 Ansprechpartner (heuristisch)
+      let name = null;
       const nameMatch = text.match(
-        /(Ansprechpartner(?:in)?|Kontakt):?\s*([A-ZÄÖÜ][a-zäöüß]+\s+[A-ZÄÖÜ][a-zäöüß]+)/
+        /(Herr|Frau)\s+[A-ZÄÖÜ][a-zäöüß]+\s+[A-ZÄÖÜ][a-zäöüß]+/
       );
+      if (nameMatch) {
+        name = nameMatch[0];
+      }
 
       return {
-        name: nameMatch ? nameMatch[2] : null,
-        email: emailMatch ? emailMatch[0] : null,
-        phone: phoneMatch ? phoneMatch[0] : null,
-        raw: text.slice(0, 2000) // nur zur Analyse / Debug
+        protected: false,
+        contact: {
+          name: name,
+          email: emailMatch ? emailMatch[0] : null,
+          phone: phoneMatch ? phoneMatch[0] : null
+        }
       };
     });
 
-    if (!contact.name && !contact.email && !contact.phone) {
-      throw new Error("Keine Kontaktdaten gefunden");
-    }
-
     await browser.close();
 
-    res.json({
+    return res.json({
       refnr,
-      contact
+      result
     });
 
   } catch (err) {
+    if (browser) await browser.close();
+
     console.error("❌ Extraktion Fehler:", err.message);
 
-    try {
-      await page.screenshot({ path: "error.png" });
-      console.log("📸 Screenshot gespeichert");
-    } catch {}
-
-    await browser.close();
-
-    res.status(500).json({
+    return res.status(500).json({
+      refnr,
       error: "Extraktion fehlgeschlagen",
-      message: err.message
+      details: err.message
     });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+app.get("/", (_, res) => {
+  res.send("BA Browser Worker läuft");
+});
 
 app.listen(PORT, () => {
   console.log(`Browser Worker läuft auf Port ${PORT}`);
